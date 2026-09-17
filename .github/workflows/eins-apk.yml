@@ -1,0 +1,99 @@
+name: Build Eins Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Eins_4_0_GitHub_ROOT_FIXED.zip'
+      - '.github/workflows/eins-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    name: Build installable Android debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check uploaded source archive
+        id: source
+        shell: bash
+        run: |
+          if [[ -f Eins_4_0_GitHub_ROOT_FIXED.zip ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'Upload Eins_4_0_GitHub_ROOT_FIXED.zip using Add file -> Upload files, then Commit changes.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Extract Android project
+        if: steps.source.outputs.present == 'true'
+        shell: bash
+        run: |
+          mkdir extracted
+          unzip -q Eins_4_0_GitHub_ROOT_FIXED.zip -d extracted
+          test -f extracted/android/settings.gradle
+          test -f extracted/android/app/build.gradle
+          test -f extracted/qa_release.py
+
+      - name: Set up Java 17
+        if: steps.source.outputs.present == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Check source code
+        if: steps.source.outputs.present == 'true'
+        working-directory: extracted
+        run: python3 qa_release.py
+
+      - name: Run Java unit checks
+        if: steps.source.outputs.present == 'true'
+        shell: bash
+        working-directory: extracted
+        run: |
+          mkdir -p /tmp/eins-java-tests
+          javac -d /tmp/eins-java-tests \
+            android/app/src/main/java/de/eins/one/SmartParser.java \
+            android/app/src/main/java/de/eins/one/Recurrence.java \
+            qa_tmp/ParserTest.java qa_tmp/RecurrenceTest.java
+          java -cp /tmp/eins-java-tests ParserTest
+          java -cp /tmp/eins-java-tests RecurrenceTest
+
+      - name: Install Android SDK
+        if: steps.source.outputs.present == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        if: steps.source.outputs.present == 'true'
+        run: sdkmanager --install 'platforms;android-36' 'build-tools;35.0.0'
+
+      - name: Install Gradle 8.13
+        if: steps.source.outputs.present == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Compile Android APK
+        if: steps.source.outputs.present == 'true'
+        working-directory: extracted/android
+        run: gradle --no-daemon --console=plain :app:assembleDebug
+
+      - name: Verify APK
+        if: steps.source.outputs.present == 'true'
+        run: test -s extracted/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Publish downloadable APK
+        if: steps.source.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eins-4.0-APK
+          path: extracted/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
